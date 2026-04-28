@@ -116,7 +116,7 @@ ggplot(  metrics_long2,aes(x = as.factor(year),    y = dens,color = location,sha
 
 
 zone_template <- annual_belt %>%
-  filter(zone != "never_under") %>%
+  filter(location != "control" & year == 2024) %>%
   distinct(transect, year, zone, seg_start_cm, seg_end_cm) %>%
   mutate(zone_length = seg_end_cm - seg_start_cm) %>%
   group_by(zone) %>%
@@ -131,37 +131,49 @@ zone_template <- annual_belt %>%
 
 control_keys <- annual_belt %>%
   group_by(transect, year) %>%
-  summarise(has_only_never = all(zone == "never_under"),
+  summarise(is_control = all(location != "solar facility"),
             .groups = "drop") %>%
-  filter(has_only_never)
+  filter(is_control)
+
+
 
 
 
 
 control_fake_zones <- annual_belt %>%
-  filter(zone == "never_under") %>%
+  subset(location != "solar facility" | year == "2022") %>%
   inner_join(control_keys, by = c("transect", "year")) %>%
-  cross_join(zone_template) %>%          # ✅ correct cross join
-  group_by(transect, year, zone_std) %>% # ✅ zone name now exists
-  mutate(
-    zone_start = min(loc_cm) +
-      cumsum(lag(template_length, default = 0)),
-    zone_end   = zone_start + template_length
-  ) %>%
+  group_by(transect, year) %>%
+  mutate(transect_start = min(loc_cm)) %>%
   ungroup() %>%
-  filter(loc_cm >= zone_start & loc_cm < zone_end) %>%
-  select(-zone_start, -zone_end, -template_length, -zone)
+  inner_join(
+    zone_template %>%
+      arrange(zone_std) %>%   # define zone order explicitly if needed
+      mutate(
+        zone_start = cumsum(lag(template_length, default = 0)),
+        zone_end   = zone_start + template_length
+      ),
+    by = character()
+  ) %>%
+  mutate(
+    rel_loc = loc_cm - transect_start
+  ) %>%
+  filter(rel_loc >= zone_start & rel_loc < zone_end) %>%
+  select(-transect_start, -rel_loc, -zone_start, -zone_end, -template_length, -zone)
+
+
 
 
 
 facility_zones <- annual_belt %>%
-  filter(!transect %in% control_keys$transect | zone != "never_under") %>%
+  filter(#!transect %in% control_keys$transect |
+    location == "solar facility" & year >= 2023) %>%
   mutate(zone_std = zone)
 
 dat_std <- bind_rows(facility_zones, control_fake_zones)
 
 comm <- dat_std %>%
-  distinct(transect, year, zone_std, spp) %>%
+  distinct(location, transect, year, zone_std, spp) %>%
   mutate(presence = 1) %>%
   pivot_wider(
     names_from = spp,
@@ -173,15 +185,13 @@ comm <- dat_std %>%
 
 library(vegan)
 
+
 beta_within <- comm %>%
-  group_by(transect, year) %>%
+  group_by(transect, year, location) %>%
   group_modify(~ {
     
     mat <- as.matrix(select(.x, -zone_std))
     rownames(mat) <- .x$zone_std
-    
-    # drop empty zones
-    mat <- mat[rowSums(mat) > 0, , drop = FALSE]
     
     if (nrow(mat) < 2) {
       return(tibble(
@@ -198,7 +208,15 @@ beta_within <- comm %>%
       beta_sd   = sd(d),
       n_zones   = nrow(mat)
     )
-  })
+  })%>%
+  subset(n_zones == 4)
+
+
+
+#this is just annual beta div
+ggplot(beta_within, aes(year, beta_mean, color = location))+
+  geom_point(jitter = TRUE)+
+  theme_base()
 
 
 
@@ -208,52 +226,4 @@ beta_within <- comm %>%
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-facility_zones <- annual_belt %>%
-  filter(!transect %in% control_keys$transect | zone != "never_under") %>%
-  mutate(zone_std = zone)
-
-dat_std <- bind_rows(facility_zones, control_fake_zones)
-
-
-
-
-
-
-
-
-
-
-
-library(vegan)
-
-
-beta_within <- comm %>%
-  group_by(transect, year) %>%
-  group_modify(~ {
-    
-    mat <- as.matrix(select(.x, -zone_std))
-    rownames(mat) <- .x$zone_std
-    
-    d <- vegdist(mat, method = "jaccard")
-    
-    tibble(
-      beta_mean = mean(as.numeric(d), na.rm = TRUE),
-      beta_sd   = sd(as.numeric(d), na.rm = TRUE),
-      n_zones   = nrow(mat)
-    )
-  })
 
