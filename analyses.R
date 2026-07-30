@@ -12,51 +12,95 @@ perennial_belt <- read.csv("C:/Users/ohler/Dropbox/Tim Work/Yellow_Pine/data/per
 
 all_metrics <- read.csv("C:/Users/ohler/Dropbox/Tim Work/Yellow_Pine/data/all_metrics_by_zone.csv")
 
+annual_line <- read.csv("C:/Users/ohler/Dropbox/Tim Work/Yellow_Pine/data/annual_line_zone_overlap_wide.csv")%>%subset(location != "landslide")
+perennial_line <- read.csv("C:/Users/ohler/Dropbox/Tim Work/Yellow_Pine/data/perennial_line_zone_overlap_wide.csv")%>%subset(location != "landslide")
+
+
+panel_zones <- read.csv("C:/Users/ohler/Dropbox/Tim Work/Yellow_Pine/data/panel_geom_with_intervals.csv")
 
 
 
-metrics_summ <- all_metrics %>%
-  group_by(year, location) %>%
+
+
+perennial_summ <- perennial_line %>%
+  group_by(year, transect, location)%>%
   dplyr::summarize(
-    perennial_dens = mean(perennial_belt__density_indiv_m2, na.rm = TRUE),
-    perennial_se   = sd(perennial_belt__density_indiv_m2, na.rm = TRUE) /
-      sqrt(sum(!is.na(perennial_belt__density_indiv_m2))),
-    annual_dens    = mean(annual_belt__density_indiv_m2, na.rm = TRUE),
-    annual_se      = sd(annual_belt__density_indiv_m2, na.rm = TRUE) /
-      sqrt(sum(!is.na(annual_belt__density_indiv_m2))),
+    perennial_cover_prop = sum(cover_prop_total)
+                            ) %>%
+    group_by(year, location) %>%
+  dplyr::summarize(
+    perennial_dens = mean(perennial_cover_prop, na.rm = TRUE),
+    perennial_se   = sd(perennial_cover_prop, na.rm = TRUE) /
+      sqrt(sum(!is.na(perennial_cover_prop))),
     .groups = "drop"
   )
 
 
-metrics_long <- metrics_summ %>%
-  select(year, location,
-         perennial_dens, perennial_se,
-         annual_dens, annual_se) %>%
-  pivot_longer(
-    cols = -c(year, location),
-    names_to = c("life_history", ".value"),
-    names_pattern = "(perennial|annual)_(dens|se)"
+annual_summ <- annual_line %>%
+  group_by(year, transect, location)%>%
+  dplyr::summarize(
+    annual_cover_prop = sum(cover_prop_total)
+  ) %>%
+  group_by(year, location) %>%
+  dplyr::summarize(
+    annual_dens = mean(annual_cover_prop, na.rm = TRUE),
+    annual_se   = sd(annual_cover_prop, na.rm = TRUE) /
+      sqrt(sum(!is.na(annual_cover_prop))),
+    .groups = "drop"
   )
 
+ann_per_total <- left_join(perennial_summ, annual_summ, by = c("year", "location"))
 
+ann_per_total_long <- pivot_longer(
+  ann_per_total,
+  cols = c(perennial_dens, perennial_se, annual_dens, annual_se),
+  names_to = c("type", ".value"),
+  names_sep = "_"
+)
 
-
-ggplot(  metrics_long,aes(x = as.factor(year),    y = dens,color = location,shape = life_history,    group = interaction(location, life_history))
-) +
-  facet_wrap(~life_history, scales = "free_y")+
-  geom_point() +
-  geom_line() +
-  geom_errorbar(
+ggplot(ann_per_total_long, aes(x = factor(year), y = dens, color = location, shape = type,
+                               group = interaction(location, type))) +
+  geom_line(position = position_dodge(width = 0.2)) +
+  geom_pointrange(
     aes(ymin = dens - se, ymax = dens + se),
-    width = 0.15
+    position = position_dodge(width = 0.2)
   ) +
-  labs(
-    x = "Year",
-    y = expression("Density (indiv " * m^-2 * ")"),
-    color = "Location",
-    shape = "Life history"
+#  facet_wrap(~ type, scales = "free_y") +
+  labs(x = "Year", y = "Cover", color = "Location") +
+  scale_color_manual(
+    values = c("control" = "darkorange", "solar facility" = "steelblue")
   ) +
   theme_base()
+
+#metrics_long <- metrics_summ %>%
+#  select(year, location,
+#         perennial_dens, perennial_se,
+#         annual_dens, annual_se) %>%
+#  pivot_longer(
+#    cols = -c(year, location),
+#    names_to = c("life_history", ".value"),
+#    names_pattern = "(perennial|annual)_(dens|se)"
+#  )
+
+
+
+
+#ggplot(  ann_per_total,aes(x = as.factor(year),    y = dens)
+#) +
+#  facet_wrap(~life_history, scales = "free_y")+
+#  geom_point() +
+#  geom_line() +
+#  geom_errorbar(
+#    aes(ymin = dens - se, ymax = dens + se),
+#    width = 0.15
+#  ) +
+#  labs(
+#    x = "Year",
+#    y = expression("Density (indiv " * m^-2 * ")"),
+#    color = "Location",
+#    shape = "Life history"
+#  ) +
+#  theme_base()
 
 
 ggsave( "C:/Users/ohler/Dropbox/Tim Work/Yellow_Pine/figures/figure_1.pdf",
@@ -75,17 +119,21 @@ ggsave( "C:/Users/ohler/Dropbox/Tim Work/Yellow_Pine/figures/figure_1.pdf",
 
 
 
-metrics_summ2 <- all_metrics %>%
+perennial_summ2 <- perennial_line %>%
+  group_by(year, transect, location, zone) %>%
+  dplyr::summarize(
+    perennial_cover_prop = sum(cover_prop_total))%>%
   group_by(year, location, zone) %>%
   dplyr::summarize(
-    perennial_dens = mean(perennial_belt__density_indiv_m2, na.rm = TRUE),
-    perennial_se   = sd(perennial_belt__density_indiv_m2, na.rm = TRUE) /
-      sqrt(sum(!is.na(perennial_belt__density_indiv_m2))),
-    annual_dens    = mean(annual_belt__density_indiv_m2, na.rm = TRUE),
-    annual_se      = sd(annual_belt__density_indiv_m2, na.rm = TRUE) /
-      sqrt(sum(!is.na(annual_belt__density_indiv_m2))),
+    perennial_dens = mean(perennial_cover_prop, na.rm = TRUE),
+    perennial_se   = sd(perennial_cover_prop, na.rm = TRUE) /
+      sqrt(sum(!is.na(perennial_cover_prop))),
     .groups = "drop"
   )
+
+
+
+
 
 
 metrics_long2 <- metrics_summ2 %>%
