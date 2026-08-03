@@ -1,6 +1,10 @@
 library(tidyverse)
 library(ggthemes)
 
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(codyn)
 
 
 annual_belt <- read.csv("C:/Users/ohler/Dropbox/Tim Work/Yellow_Pine/data/annual_belt_with_zone.csv")
@@ -16,9 +20,111 @@ annual_line <- read.csv("C:/Users/ohler/Dropbox/Tim Work/Yellow_Pine/data/annual
 perennial_line <- read.csv("C:/Users/ohler/Dropbox/Tim Work/Yellow_Pine/data/perennial_line_zone_overlap_wide.csv")%>%subset(location != "landslide")
 
 
-panel_zones <- read.csv("C:/Users/ohler/Dropbox/Tim Work/Yellow_Pine/data/panel_geom_with_intervals.csv")
+panel_zones <- read.csv("C:/Users/ohler/Dropbox/Tim Work/Yellow_Pine/data/panel_geom_with_intervals.csv")%>%
+
+  dplyr::select(-date)
 
 
+
+panel_zones_long <- panel_zones %>%
+  pivot_longer(
+    cols = matches("^(start|end)_.*_cm$"),
+    names_to = c(".value", "zone"),
+    names_pattern = "(start|end)_(.*)_cm"
+  ) %>%
+  rename(start_cm = start, end_cm = end)%>%
+  filter(zone != "ever")
+
+
+
+zone_lengths <- panel_zones %>%
+  mutate(
+    always_cm     = end_always_cm - start_always_cm,
+    trans_west_cm = end_trans_west_cm - start_trans_west_cm,
+    trans_east_cm = end_trans_east_cm - start_trans_east_cm
+  ) %>%
+  dplyr::select(transect, panel_id,  always_cm, trans_west_cm, trans_east_cm)
+
+
+library(dplyr)
+
+panel_bounds <- panel_zones %>%
+  transmute(transect, panel_id,
+            footprint_start = start_trans_west_cm,
+            footprint_end   = end_trans_east_cm) %>%
+  group_by(transect) %>%
+  arrange(footprint_start, .by_group = TRUE) %>%
+  mutate(
+    next_start = lead(footprint_start),
+    next_panel = lead(panel_id),
+    midpoint   = (footprint_end + next_start) / 2
+  ) %>%
+  ungroup()
+
+# leading gap: before the first panel -> belongs to panel 1
+leading <- panel_bounds %>%
+  group_by(transect) %>%
+  slice_min(footprint_start, n = 1) %>%
+  ungroup() %>%
+  transmute(transect, panel_id, zone = "never", start_cm = 0, end_cm = footprint_start)
+
+# trailing gap: after the last panel -> belongs to the last panel
+trailing <- panel_bounds %>%
+  group_by(transect) %>%
+  slice_max(footprint_start, n = 1) %>%
+  ungroup() %>%
+  transmute(transect, panel_id, zone = "never", start_cm = footprint_end, end_cm = 10000)
+
+# middle gaps: split at the midpoint between each pair of neighboring panels
+middle_a <- panel_bounds %>%   # first half -> belongs to the EARLIER panel
+  filter(!is.na(next_panel)) %>%
+  transmute(transect, panel_id, zone = "never", start_cm = footprint_end, end_cm = midpoint)
+
+middle_b <- panel_bounds %>%   # second half -> belongs to the LATER panel
+  filter(!is.na(next_panel)) %>%
+  transmute(transect, panel_id = next_panel, zone = "never", start_cm = midpoint, end_cm = next_start)
+
+never_segments <- bind_rows(leading, middle_a, middle_b, trailing) %>%
+  mutate(length_cm = end_cm - start_cm) %>%
+  filter(length_cm > 0)
+
+# combine with the panel-tied zones to get one complete segmentation
+full_segments <- bind_rows(
+  panel_zones_long %>% select(transect, panel_id, zone, start_cm, end_cm),
+  never_segments   %>% select(transect, panel_id, zone, start_cm, end_cm)
+) %>%
+  mutate(length_cm = end_cm - start_cm)
+
+# fake 1m zones for control transects (no panels, so no real zone structure exists)
+transect_location <- annual_line %>%
+  distinct(transect, location)
+
+zone_cycle <- c("never", "west", "always", "east")
+
+fake_zones <- transect_location %>%
+  filter(location == "control") %>%
+  select(transect) %>%
+  tidyr::crossing(zone_num = 1:100) %>%
+  transmute(
+    transect,
+    panel_id = ((zone_num - 1) %/% 4) + 1,
+    zone     = zone_cycle[((zone_num - 1) %% 4) + 1],
+    start_cm = (zone_num - 1) * 100,
+    end_cm   = zone_num * 100
+  )
+
+full_segments <- bind_rows(
+  panel_zones_long %>% select(transect, panel_id, zone, start_cm, end_cm),
+  never_segments   %>% select(transect, panel_id, zone, start_cm, end_cm),
+  fake_zones
+) %>%
+  mutate(length_cm = end_cm - start_cm)
+
+# consolidated zone length per transect/panel_id/zone (some panels get 2 never pieces,
+# a leading/trailing edge plus one half-gap from a neighbor, so lengths get summed)
+zone_len_full <- full_segments %>%
+  group_by(transect, panel_id, zone) %>%
+  summarise(zone_length_cm = sum(length_cm), .groups = "drop")
 
 
 
@@ -26,8 +132,8 @@ perennial_summ <- perennial_line %>%
   group_by(year, transect, location)%>%
   dplyr::summarize(
     perennial_cover_prop = sum(cover_prop_total)
-                            ) %>%
-    group_by(year, location) %>%
+  ) %>%
+  group_by(year, location) %>%
   dplyr::summarize(
     perennial_dens = mean(perennial_cover_prop, na.rm = TRUE),
     perennial_se   = sd(perennial_cover_prop, na.rm = TRUE) /
@@ -65,42 +171,12 @@ ggplot(ann_per_total_long, aes(x = factor(year), y = dens, color = location, sha
     aes(ymin = dens - se, ymax = dens + se),
     position = position_dodge(width = 0.2)
   ) +
-#  facet_wrap(~ type, scales = "free_y") +
+  #  facet_wrap(~ type, scales = "free_y") +
   labs(x = "Year", y = "Cover", color = "Location") +
   scale_color_manual(
     values = c("control" = "darkorange", "solar facility" = "steelblue")
   ) +
   theme_base()
-
-#metrics_long <- metrics_summ %>%
-#  select(year, location,
-#         perennial_dens, perennial_se,
-#         annual_dens, annual_se) %>%
-#  pivot_longer(
-#    cols = -c(year, location),
-#    names_to = c("life_history", ".value"),
-#    names_pattern = "(perennial|annual)_(dens|se)"
-#  )
-
-
-
-
-#ggplot(  ann_per_total,aes(x = as.factor(year),    y = dens)
-#) +
-#  facet_wrap(~life_history, scales = "free_y")+
-#  geom_point() +
-#  geom_line() +
-#  geom_errorbar(
-#    aes(ymin = dens - se, ymax = dens + se),
-#    width = 0.15
-#  ) +
-#  labs(
-#    x = "Year",
-#    y = expression("Density (indiv " * m^-2 * ")"),
-#    color = "Location",
-#    shape = "Life history"
-#  ) +
-#  theme_base()
 
 
 ggsave( "C:/Users/ohler/Dropbox/Tim Work/Yellow_Pine/figures/figure_1.pdf",
@@ -118,61 +194,81 @@ ggsave( "C:/Users/ohler/Dropbox/Tim Work/Yellow_Pine/figures/figure_1.pdf",
 
 
 
-
-perennial_summ2 <- perennial_line %>%
-  group_by(year, transect, location, zone) %>%
-  dplyr::summarize(
-    perennial_cover_prop = sum(cover_prop_total))%>%
-  group_by(year, location, zone) %>%
-  dplyr::summarize(
-    perennial_dens = mean(perennial_cover_prop, na.rm = TRUE),
-    perennial_se   = sd(perennial_cover_prop, na.rm = TRUE) /
-      sqrt(sum(!is.na(perennial_cover_prop))),
-    .groups = "drop"
-  )
+annual_long <- annual_line %>%
+  filter(!is.na(start_canopy_cm)) %>%          # drop no_intercept rows (nothing to expand)
+  mutate(cm = map2(start_canopy_cm, stop_canopy_cm - 1, seq)) %>%
+  unnest(cm) %>%
+  select(-start_canopy_cm, -stop_canopy_cm, -always_under_cm, -transitional_west_cm, -transitional_east_cm,  -line_status, -sample_line_len_cm, -cover_cm_total, -cover_prop_total)     # optional: drop now-redundant bounds
 
 
+annual_long_zoned <- annual_long %>%
+  left_join(
+    full_segments,
+    by = join_by(transect,
+                 cm >= start_cm,
+                 cm < end_cm)
+  )%>%
+  mutate(zone = coalesce(zone, "never"))
 
 
+perennial_long <- perennial_line %>%
+  filter(!is.na(start_canopy_cm)) %>%          # drop no_intercept rows (nothing to expand)
+  mutate(cm = map2(start_canopy_cm, stop_canopy_cm - 1, seq)) %>%
+  unnest(cm) %>%
+  select(-start_canopy_cm, -stop_canopy_cm, -always_under_cm, -transitional_west_cm, -transitional_east_cm,  -line_status, -sample_line_len_cm, -cover_cm_total, -cover_prop_total)     # optional: drop now-redundant bounds
 
 
-metrics_long2 <- metrics_summ2 %>%
-  select(year, location,zone,
-         perennial_dens, perennial_se,
-         annual_dens, annual_se) %>%
-  pivot_longer(
-    cols = -c(year, location, zone),
-    names_to = c("life_history", ".value"),
-    names_pattern = "(perennial|annual)_(dens|se)"
-  )
+perennial_long_zoned <- perennial_long %>%
+  left_join(
+    full_segments,
+    by = join_by(transect,
+                 cm >= start_cm,
+                 cm < end_cm)
+  )%>%
+  mutate(zone = coalesce(zone, "never"))
 
 
+both_zoned <- rbind(annual_long_zoned, perennial_long_zoned)
 
 
-ggplot(
-  metrics_long2,
-  aes(
-    x = as.factor(year),
-    y = dens,
-    color = location,
-    shape = life_history,
-    group = location
-  )
-) +
-  facet_grid(life_history ~ zone, scales = "free_y") +
-  geom_point() +
-  geom_line() +
-  geom_errorbar(
-    aes(ymin = dens - se, ymax = dens + se),
-    width = 0.15
+# 3. Count presence-cm per species/year/transect/panel/zone, then divide by zone length
+abundance <- both_zoned%>%
+  count(year, location, transect, panel_id, zone, spp, name = "presence_cm") %>%
+  left_join(zone_len_full, by = c("transect", "panel_id", "zone")) %>%
+  mutate(cover =  presence_cm / zone_length_cm)
+
+
+abundance_summ <- abundance%>%
+  group_by(year, location, transect, panel_id, zone)%>%
+  dplyr::summarize(cover = sum(cover, na.rm = TRUE))%>%
+  subset(cover != 0)
+ # group_by(year, location, transect, zone)%>%
+  #dplyr::summarize(cover = mean(cover, na.rm = TRUE))
+
+abundance_summ$zone2 <- ifelse(abundance_summ$location == "control", "control", abundance_summ$zone)
+
+abundance_summ%>%
+  group_by(year, location, zone2)%>%
+  dplyr::summarize(cover_mean = mean(cover, na.rm = TRUE),
+                   cover_se   = sd(cover, na.rm = TRUE) /
+                     sqrt(sum(!is.na(cover))),
+                   .groups = "drop"
+  )%>%
+ggplot(aes(x = factor(year), y = cover_mean, color = location, shape = zone2,
+          group = interaction(location, zone2))) +
+  geom_line(position = position_dodge(width = 0.2)) +
+  geom_pointrange(
+    aes(ymin = cover_mean - cover_se, ymax = cover_mean + cover_se),
+    position = position_dodge(width = 0.2)
   ) +
-  labs(
-    x = "Year",
-    y = expression("Density (indiv " * m^-2 * ")"),
-    color = "Location",
-    shape = "Life history"
+  #  facet_wrap(~ type, scales = "free_y") +
+  labs(x = "Year", y = "Cover", color = "Location") +
+  scale_color_manual(
+    values = c("control" = "darkorange", "solar facility" = "steelblue")
   ) +
   theme_base()
+  
+  
 
 ggsave( "C:/Users/ohler/Dropbox/Tim Work/Yellow_Pine/figures/figure_2.pdf",
         plot = last_plot(),
@@ -185,6 +281,105 @@ ggsave( "C:/Users/ohler/Dropbox/Tim Work/Yellow_Pine/figures/figure_2.pdf",
         dpi = 600,
         limitsize = TRUE
 )
+
+
+
+########################################
+######Some alpha diversity stuff
+
+abundance_comm <- abundance%>%
+              subset(is.na(cover) == FALSE)%>%
+                  unite("replicate", c( location, transect, panel_id, zone), sep = "::")%>%
+  community_structure(time.var = "year",
+                      abundance.var = "cover",
+                      replicate.var = "replicate",
+                      metric = "EQ")%>%
+              separate("replicate", c( "location", "transect", "panel_id", "zone"), sep = "::")
+    
+abundance_comm$zone2 <- ifelse(abundance_comm$location == "control", "control", abundance_comm$zone)
+
+
+abundance_comm%>%
+  group_by(year, location, zone2)%>%
+  dplyr::summarize(richness_mean = mean(richness, na.rm = TRUE),
+                   richness_se   = sd(richness, na.rm = TRUE) /
+                     sqrt(sum(!is.na(richness))),
+                   .groups = "drop"
+  )%>%
+  ggplot(aes(x = factor(year), y = richness_mean, color = location, shape = zone2,
+             group = interaction(location, zone2))) +
+  geom_line(position = position_dodge(width = 0.2)) +
+  geom_pointrange(
+    aes(ymin = richness_mean - richness_se, ymax = richness_mean + richness_se),
+    position = position_dodge(width = 0.2)
+  ) +
+  #  facet_wrap(~ type, scales = "free_y") +
+  labs(x = "Year", y = "Species richness", color = "Location") +
+  scale_color_manual(
+    values = c("control" = "darkorange", "solar facility" = "steelblue")
+  ) +
+  theme_base()
+
+
+
+abundance_comm%>%
+  group_by(year, location, zone2)%>%
+  dplyr::summarize(EQ_mean = mean(EQ, na.rm = TRUE),
+                   EQ_se   = sd(EQ, na.rm = TRUE) /
+                     sqrt(sum(!is.na(EQ))),
+                   .groups = "drop"
+  )%>%
+  drop_na()%>%
+  ggplot(aes(x = factor(year), y = EQ_mean, color = location, shape = zone2,
+             group = interaction(location, zone2))) +
+  geom_line(position = position_dodge(width = 0.2)) +
+  geom_pointrange(
+    aes(ymin = EQ_mean - EQ_se, ymax = EQ_mean + EQ_se),
+    position = position_dodge(width = 0.2)
+  ) +
+  #  facet_wrap(~ type, scales = "free_y") +
+  labs(x = "Year", y = "Evenness", color = "Location") +
+  scale_color_manual(
+    values = c("control" = "darkorange", "solar facility" = "steelblue")
+  ) +
+  theme_base()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 ###########
 ###Beta diversity annuals
