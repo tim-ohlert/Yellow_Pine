@@ -346,7 +346,166 @@ abundance_comm%>%
 
 
 
+########################################
+###### INDICATOR SPECIES ANALYSIS ######
+########################################
+# Two analyses:
+#   (1) solar facility vs control   -> replicate = transect
+#   (2) panel zones                 -> replicate = zone within panel within transect
+#
+# Assumes `abundance`, `both_zoned`, and `zone_len_full` already exist
+# from the upstream script.
 
+library(indicspecies)
+library(permute)
+
+set.seed(1)
+
+
+# long -> wide species matrix, zeros filled in
+make_wide <- function(dat, id_cols) {
+  dat %>%
+    filter(!is.na(cover), cover > 0) %>%
+    group_by(across(all_of(c(id_cols, "spp")))) %>%
+    dplyr::summarize(cover = sum(cover), .groups = "drop") %>%
+    pivot_wider(names_from = spp, values_from = cover, values_fill = 0)
+}
+
+# run multipatt; drops empty rows and absent species first
+run_indval <- function(wide, id_cols, group_var, blocks = NULL,
+                       nperm = 999, duleg = FALSE) {
+  
+  spp_cols <- setdiff(names(wide), id_cols)
+  x   <- as.data.frame(wide[, spp_cols, drop = FALSE])
+  grp <- wide[[group_var]]
+  
+  keep <- rowSums(x) > 0 & !is.na(grp)        # multipatt chokes on all-zero rows
+  x    <- x[keep, , drop = FALSE]
+  grp  <- grp[keep]
+  if (!is.null(blocks)) blocks <- factor(blocks[keep])
+  
+  x <- x[, colSums(x) > 0, drop = FALSE]      # species absent from this subset
+  
+  ctrl <- if (is.null(blocks)) {
+    how(nperm = nperm)
+  } else {
+    how(nperm = nperm, blocks = blocks)       # permute only within transect
+  }
+  
+  multipatt(x, grp, func = "IndVal.g", duleg = duleg, control = ctrl)
+}
+
+# significant results as a tidy data frame
+tidy_indval <- function(iv, alpha = 0.05) {
+  s         <- iv$sign
+  grp_cols  <- grep("^s\\.", colnames(s), value = TRUE)
+  grp_names <- sub("^s\\.", "", grp_cols)
+  
+  data.frame(
+    spp     = rownames(s),
+    group   = apply(s[, grp_cols, drop = FALSE], 1,
+                    function(r) paste(grp_names[r == 1], collapse = " + ")),
+    stat    = s$stat,
+    p.value = s$p.value,
+    row.names = NULL,
+    stringsAsFactors = FALSE
+  ) %>%
+    filter(!is.na(p.value), p.value <= alpha) %>%
+    arrange(group, desc(stat))
+}
+
+split_by_year <- function(wide) {
+  pieces <- wide %>% group_by(year) %>% group_split()
+  rlang::set_names(pieces, purrr::map_chr(pieces, ~ as.character(.x$year[1])))
+}
+
+
+# ==========================================================================
+# ANALYSIS 1 -- SOLAR FACILITY vs CONTROL
+# Cover rolled up to the whole transect so transect is the replicate.
+# ==========================================================================
+
+transect_len <- zone_len_full %>%
+  group_by(transect) %>%
+  dplyr::summarize(transect_len_cm = sum(zone_length_cm), .groups = "drop")
+
+abundance_transect <- both_zoned %>%
+  count(year, location, transect, spp, name = "presence_cm") %>%
+  left_join(transect_len, by = "transect") %>%
+  mutate(cover = presence_cm / transect_len_cm)
+
+loc_ids   <- c("year", "location", "transect")
+wide_loc  <- make_wide(abundance_transect, loc_ids)
+
+iv_loc <- wide_loc %>%
+  split_by_year() %>%
+  purrr::map(~ run_indval(.x, loc_ids, group_var = "location"))
+
+purrr::iwalk(iv_loc, function(iv, yr) {
+  cat("\n===============  facility vs control,", yr, " ===============\n")
+  print(summary(iv))
+})
+
+iv_loc_tbl <- purrr::imap_dfr(iv_loc,
+                              ~ tidy_indval(.x) %>% mutate(year = .y, .before = 1))
+iv_loc_tbl
+
+
+# ==========================================================================
+# ANALYSIS 2 -- PANEL ZONES
+# Replicate = one zone within one panel within one transect, facility only.
+# ==========================================================================
+
+zone_ids  <- c("year", "location", "transect", "panel_id", "zone")
+wide_zone <- make_wide(abundance, zone_ids)
+
+iv_zone <- wide_zone %>%
+  filter(location == "solar facility") %>%
+  split_by_year() %>%
+  purrr::map(~ run_indval(.x, zone_ids, group_var = "zone", blocks = .x$transect))
+
+purrr::iwalk(iv_zone, function(iv, yr) {
+  cat("\n===============  zone indicators,", yr, " ===============\n")
+  print(summary(iv))
+})
+
+iv_zone_tbl <- purrr::imap_dfr(iv_zone,
+                               ~ tidy_indval(.x) %>% mutate(year = .y, .before = 1))
+iv_zone_tbl
+
+
+# --- single year on its own
+iv_zone_2024 <- wide_zone %>%
+  filter(year == 2024, location == "solar facility") %>%
+  run_indval(zone_ids, group_var = "zone")
+
+summary(iv_zone_2024)
+
+
+wide_zone2 <- wide_zone %>%
+mutate(zone2 = ifelse(location == "control", "control", zone), .after = zone)
+
+zone2_ids <- c(zone_ids, "zone2")
+
+iv_zone2 <- wide_zone2 %>%
+  split_by_year() %>%
+  purrr::map(~ run_indval(.x, zone2_ids, group_var = "zone2"))
+
+purrr::iwalk(iv_zone2, function(iv, yr) {
+  cat("\n===============  control + zone indicators,", yr, " ===============\n")
+  print(summary(iv))
+})
+
+iv_zone2_tbl <- purrr::imap_dfr(iv_zone2,
+                                ~ tidy_indval(.x) %>% mutate(year = .y, .before = 1))
+iv_zone2_tbl
+
+# single year on its own
+iv_zone2_2024 <- wide_zone2 %>%
+  filter(year == 2024) %>%
+  run_indval(zone2_ids, group_var = "zone2")
+
+summary(iv_zone2_2024)
 
 
 
