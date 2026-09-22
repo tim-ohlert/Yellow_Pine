@@ -481,6 +481,15 @@ iv_zone_2024 <- wide_zone %>%
 
 summary(iv_zone_2024)
 
+iv_zone_2024_tbl <- tidy_indval(iv_zone_2024) %>%
+  mutate(year = 2024, .before = 1)
+
+iv_zone_2024_tbl
+
+
+
+
+
 
 wide_zone2 <- wide_zone %>%
 mutate(zone2 = ifelse(location == "control", "control", zone), .after = zone)
@@ -500,12 +509,6 @@ iv_zone2_tbl <- purrr::imap_dfr(iv_zone2,
                                 ~ tidy_indval(.x) %>% mutate(year = .y, .before = 1))
 iv_zone2_tbl
 
-# single year on its own
-iv_zone2_2024 <- wide_zone2 %>%
-  filter(year == 2024) %>%
-  run_indval(zone2_ids, group_var = "zone2")
-
-summary(iv_zone2_2024)
 
 
 
