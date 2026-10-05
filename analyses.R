@@ -99,7 +99,7 @@ full_segments <- bind_rows(
 transect_location <- annual_line %>%
   distinct(transect, location)
 
-zone_cycle <- c("never", "west", "always", "east")
+zone_cycle <- c("never", "trans_west", "always", "trans_east")
 
 fake_zones <- transect_location %>%
   filter(location == "control") %>%
@@ -184,7 +184,7 @@ ggsave( "C:/Users/ohler/Dropbox/Tim Work/Yellow_Pine/figures/figure_1.pdf",
         device = "pdf",
         path = NULL,
         scale = 1,
-        width = 8,
+        width = 6,
         height = 4,
         units = c("in"),
         dpi = 600,
@@ -321,6 +321,90 @@ abundance_comm%>%
   theme_base()
 
 
+# Per-zone summary (used for 2024 solar + all control)
+df_zone <- abundance_comm %>%
+  group_by(year, location, zone2) %>%
+  summarize(
+    richness_mean = mean(richness, na.rm = TRUE),
+    richness_se   = sd(richness, na.rm = TRUE) / sqrt(sum(!is.na(richness))),
+    .groups = "drop"
+  )
+
+# Collapsed solar summary for 2022 & 2023
+df_solar_coll <- abundance_comm %>%
+  filter(location == "solar facility", year %in% c(2022, 2023)) %>%
+  group_by(year, location) %>%
+  summarize(
+    richness_mean = mean(richness, na.rm = TRUE),
+    richness_se   = sd(richness, na.rm = TRUE) / sqrt(sum(!is.na(richness))),
+    .groups = "drop"
+  )
+
+# For line drawing: expand collapsed 2022/2023 to one row per zone,
+# then bind with zoned 2024 so lines fan out correctly
+solar_zones <- unique(df_zone$zone2[df_zone$location == "solar facility"])
+
+df_solar_lines <- bind_rows(
+  crossing(df_solar_coll, zone2 = solar_zones),
+  df_zone %>% filter(location == "solar facility", year == 2024)
+)
+
+ggplot() +
+  # Control: lines and points (unchanged)
+  geom_line(
+    data = df_zone %>% filter(location == "control"),
+    aes(x = factor(year), y = richness_mean,
+        group = interaction(location, zone2), color = location),
+    position = position_dodge(width = 0.2)
+  ) +
+  geom_pointrange(
+    data = df_zone %>% filter(location == "control"),
+    aes(x = factor(year), y = richness_mean, shape = zone2,
+        ymin = richness_mean - richness_se,
+        ymax = richness_mean + richness_se,
+        color = location),
+    position = position_dodge(width = 0.2)
+  ) +
+  # Solar: fan lines from collapsed 2022/2023 → zoned 2024
+  geom_line(
+    data = df_solar_lines,
+    aes(x = factor(year), y = richness_mean,
+        group = zone2, color = location),
+    position = position_dodge(width = 0.2)
+  ) +
+  # Solar 2024: split by zone
+  geom_pointrange(
+    data = df_zone %>% filter(location == "solar facility", year == 2024),
+    aes(x = factor(year), y = richness_mean, shape = zone2,
+        ymin = richness_mean - richness_se,
+        ymax = richness_mean + richness_se,
+        color = location),
+    position = position_dodge(width = 0.2)
+  ) +
+  # Solar 2022/2023: single collapsed point, drawn last to sit on top of lines
+  geom_pointrange(
+    data = df_solar_coll,
+    aes(x = factor(year), y = richness_mean,
+        ymin = richness_mean - richness_se,
+        ymax = richness_mean + richness_se),
+    color = "steelblue",
+    shape = 16
+  ) +
+  labs(x = "Year", y = "Species richness", color = "Location") +
+  scale_color_manual(
+    values = c("control" = "darkorange", "solar facility" = "steelblue")
+  ) +
+  theme_base()
+
+
+
+
+
+
+
+
+
+
 
 abundance_comm%>%
   group_by(year, location, zone2)%>%
@@ -343,6 +427,80 @@ abundance_comm%>%
     values = c("control" = "darkorange", "solar facility" = "steelblue")
   ) +
   theme_base()
+
+
+
+# Per-zone summary
+df_zone <- abundance_comm %>%
+  group_by(year, location, zone2) %>%
+  summarize(
+    EQ_mean = mean(EQ, na.rm = TRUE),
+    EQ_se   = sd(EQ, na.rm = TRUE) / sqrt(sum(!is.na(EQ))),
+    .groups = "drop"
+  )
+
+
+# Collapsed solar summary for 2022 & 2023
+df_solar_coll <- abundance_comm %>%
+  filter(location == "solar facility", year %in% c(2022, 2023)) %>%
+  group_by(year, location) %>%
+  summarize(
+    EQ_mean = mean(EQ, na.rm = TRUE),
+    EQ_se   = sd(EQ, na.rm = TRUE) / sqrt(sum(!is.na(EQ))),
+    .groups = "drop"
+  )
+
+solar_zones <- unique(df_zone$zone2[df_zone$location == "solar facility"])
+
+df_solar_lines <- bind_rows(
+  crossing(df_solar_coll, zone2 = solar_zones),
+  df_zone %>% filter(location == "solar facility", year == 2024)
+)
+
+ggplot() +
+  geom_line(
+    data = df_zone %>% filter(location == "control"),
+    aes(x = factor(year), y = EQ_mean,
+        group = interaction(location, zone2), color = location),
+    position = position_dodge(width = 0.2)
+  ) +
+  geom_pointrange(
+    data = df_zone %>% filter(location == "control"),
+    aes(x = factor(year), y = EQ_mean, shape = zone2,
+        ymin = EQ_mean - EQ_se,
+        ymax = EQ_mean + EQ_se,
+        color = location),
+    position = position_dodge(width = 0.2)
+  ) +
+  geom_line(
+    data = df_solar_lines,
+    aes(x = factor(year), y = EQ_mean,
+        group = zone2, color = location),
+    position = position_dodge(width = 0.2)
+  ) +
+  geom_pointrange(
+    data = df_zone %>% filter(location == "solar facility", year == 2024),
+    aes(x = factor(year), y = EQ_mean, shape = zone2,
+        ymin = EQ_mean - EQ_se,
+        ymax = EQ_mean + EQ_se,
+        color = location),
+    position = position_dodge(width = 0.2)
+  ) +
+  geom_pointrange(
+    data = df_solar_coll,
+    aes(x = factor(year), y = EQ_mean,
+        ymin = EQ_mean - EQ_se,
+        ymax = EQ_mean + EQ_se),
+    color = "steelblue",
+    shape = 16
+  ) +
+  labs(x = "Year", y = "Evenness (EQ)", color = "Location") +
+  scale_color_manual(
+    values = c("control" = "darkorange", "solar facility" = "steelblue")
+  ) +
+  theme_base()
+
+
 
 
 
@@ -459,40 +617,9 @@ iv_loc_tbl
 zone_ids  <- c("year", "location", "transect", "panel_id", "zone")
 wide_zone <- make_wide(abundance, zone_ids)
 
-iv_zone <- wide_zone %>%
-  filter(location == "solar facility") %>%
-  split_by_year() %>%
-  purrr::map(~ run_indval(.x, zone_ids, group_var = "zone", blocks = .x$transect))
-
-purrr::iwalk(iv_zone, function(iv, yr) {
-  cat("\n===============  zone indicators,", yr, " ===============\n")
-  print(summary(iv))
-})
-
-iv_zone_tbl <- purrr::imap_dfr(iv_zone,
-                               ~ tidy_indval(.x) %>% mutate(year = .y, .before = 1))
-iv_zone_tbl
-
-
-# --- single year on its own
-iv_zone_2024 <- wide_zone %>%
-  filter(year == 2024, location == "solar facility") %>%
-  run_indval(zone_ids, group_var = "zone")
-
-summary(iv_zone_2024)
-
-iv_zone_2024_tbl <- tidy_indval(iv_zone_2024) %>%
-  mutate(year = 2024, .before = 1)
-
-iv_zone_2024_tbl
-
-
-
-
-
 
 wide_zone2 <- wide_zone %>%
-mutate(zone2 = ifelse(location == "control", "control", zone), .after = zone)
+  mutate(zone2 = ifelse(location == "control", "control", zone), .after = zone)
 
 zone2_ids <- c(zone_ids, "zone2")
 
@@ -508,6 +635,25 @@ purrr::iwalk(iv_zone2, function(iv, yr) {
 iv_zone2_tbl <- purrr::imap_dfr(iv_zone2,
                                 ~ tidy_indval(.x) %>% mutate(year = .y, .before = 1))
 iv_zone2_tbl
+
+
+# --- single year on its own
+iv_zone_2024 <- wide_zone2 %>%
+  filter(year == 2024#, location == "solar facility"
+         ) %>%
+  run_indval(zone2_ids, group_var = "zone2")
+
+summary(iv_zone_2024)
+
+iv_zone_2024_tbl <- tidy_indval(iv_zone_2024) %>%
+  mutate(year = 2024, .before = 1)
+
+iv_zone_2024_tbl
+
+
+
+
+
 
 
 
